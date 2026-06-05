@@ -25,3 +25,4 @@ Writeups for [Gulaschprogrammiernacht CTF 2026](https://ctf.kitctf.de/).
 | Challenge | Writeup |
 |-----------|---------|
 | restaurant-builder | [web/restaurant-builder](./web/restaurant-builder) |
+| pharry | [web/pharry](./web/pharry) |
