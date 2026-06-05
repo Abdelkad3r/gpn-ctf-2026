@@ -9,25 +9,30 @@
 > is shit. But they dont want to hear that excuse. The binary is there for a
 > reason, LOOK at it.
 
+**Flag:** `GPNCTF{coMP1L3rS_aRe_Y0UR_fr1End_7HEY_w0ULd_never}`
+
+The flag spells out the lesson: the source code is fine, the **compiler
+miscompiled** the AVX2 hot path.
+
 ## TL;DR
 
-SIS-style hash: `flag_hash = A · secret mod q` with `A ∈ Z_q^{N×M}` random,
-`secret ∈ {0..9}^M`, and `N=64, M=164, q=12289`. We get an oracle that hashes
-arbitrary vectors, so we recover `A` column-by-column by hashing the standard
-basis. Then we set up the q-ary kernel lattice
-`Λ_q^⊥(A) = {x ∈ Z^M : A·x ≡ 0 (mod q)}`, add a Kannan embedding row for a
-particular solution `s₀`, and run BKZ on the resulting 165-dim lattice with
-fplll's preprocessing+pruning strategies (without strategies BKZ-50 alone gets
-nowhere; with them it lands the target in ~50s). The short vector decodes
-back to `secret`; submitting it wins.
+SIS-style hash `flag_hash = A · secret mod q` with `A ∈ Z_q^{N×M}` random,
+`secret ∈ {0..9}^M`, `N=64, M=164, q=12289`. An oracle hashes arbitrary
+vectors, so we leak `A` column-by-column via `multi_hash`, then attack the
+q-ary kernel lattice `Λ_q^⊥(A)` with a Kannan embedding. BKZ on the resulting
+165-dim lattice — with fplll's `default.json` preprocessing+pruning strategies
+— finds the short target around `β = 50..60` in ~45 s.
 
-The "LOOK at the binary" line is loud-bearing: the in-house `mat.c` has a
-ragged matrix-storage convention that creates a real off-by-one in
-`multi_hash` — the printed hash for the i-th query has length `n`, not `N`,
-and the buffer the server reads from spills into the next hash. With
-`batch_size = 64` everything lines up; with `batch_size = 100` you walk away
-with a *different* `s` that still satisfies `A·s ≡ flag_hash mod q` and the
-server happily prints back the real secret to laugh at you.
+The Linux binary's `mat_mul` (the AVX2 inner-product routine) is
+**miscompiled** under `gcc -O3 -mavx2 -funroll-loops`. In each 4-way
+unrolled output block the compiler swaps **lanes 1 and 2**, so result
+positions `4k+1` and `4k+2` come out swapped for every full block — but the
+final scalar tail (the last `MM mod 4` entries) is correct. `mat_mul_naive`
+(used only for `flag_hash` at startup) is scalar and unaffected, so the
+target side of the SIS equation is fine — only the *queries* we use to leak
+`A` are corrupted, and they're corrupted **in the batch axis** for
+`multi_hash`. Undoing the per-batch swap (and not over-swapping the tail
+block) restores `A` exactly and BKZ recovers `secret`.
 
 ## Protocol
 
@@ -38,137 +43,126 @@ server happily prints back the real secret to laugh at you.
 3) Exit
 ```
 
-Option 0 has the obvious "hint": on a wrong guess the server prints
-`secret_vec` *before* `exit(0)`. That's useless across connections (each
-session re-randomises `A`, `secret`, and `flag_hash`), and it kills the
-session before we can re-submit. The print-and-die is useful for verifying
-attacks locally though.
+Option 0 has the obvious "hint": on a wrong guess the server prints the real
+`secret_vec` before `exit(0)`. Useless across connections (each session
+re-randomises `A`, `secret`, `flag_hash`) but priceless for ground-truth
+debugging against a locally-rebuilt binary.
 
-## Recovering A
+## The compiler bug
 
-For each `i ∈ [0, 164)` we send `v = e_i` and the server returns `A · e_i`,
-which is the i-th column of A. Doing it 164 times by `hash_single` is the
-obvious route. To save round-trips we'd like to batch via option 2 — but
-that's where the binary bug bites.
-
-### The `multi_hash` size bug
-
-`multi_hash(n, msgs)` builds a temporary `n × N` result via two transposes,
-then returns `results[i] = mat_get_col(res_mat, i)`. The catch: `res_mat`
-was created with `create_matrix(N, n)`, which the library lays out with
-`res_mat->rows = n`, `res_mat->cols = N`. `mat_get_col` then sizes the
-column vector by `MatRows(res_mat) = n`:
+`mat_mul` is a textbook 4-wide unrolled dot product:
 
 ```c
-struct vec32 *col = create_vec32(MatRows(mat));   // size n, not N
-for (i = 0; i < MatRows(mat); i++)               // i in [0, n)
-    Vec(col, i) = Mat(mat, i, col_index);         // res_mat->data[col_index * N + i]
+for (blk = 0; blk < (int)MM - 4; blk += 4) {
+    for (int i = 0; i < NN; i++) {
+        result[blk + 0] += src[i] * (uint64_t)BB[i*MM + blk + 0];
+        result[blk + 1] += src[i] * (uint64_t)BB[i*MM + blk + 1];
+        result[blk + 2] += src[i] * (uint64_t)BB[i*MM + blk + 2];
+        result[blk + 3] += src[i] * (uint64_t)BB[i*MM + blk + 3];
+    }
+}
+for (; blk < MM; blk++) for (int i = 0; i < NN; i++)
+    result[blk] += src[i] * BB[i*MM + blk];
 ```
 
-Concretely, `res_mat->data` is `n * N = n * 64` u32s flat. The "column i"
-that gets read out is `data[i*64 .. i*64 + n - 1]`. When `n == 64` that's a
-clean window over `(A · msgs[i])[0..63]`. When `n != 64` the window slides
-across rows:
+`gcc -O3 -funroll-loops -mavx2 -flra-remat -fsched-spec …` (the exact
+Dockerfile recipe) vectorises the outer loop with `vpmuludq` over four
+64-bit lanes packed into `ymm0..15`, then stores back four 64-bit results
+per outer iteration. Reading the disassembly (`mat_mul @ 0x404830`):
 
-| `n` | what we get for hash `i` |
-| :- | :- |
-| `n < 64` | only the first `n` entries of `A · msgs[i]` (rest never printed) |
-| `n == 64` | exact `A · msgs[i]` ✓ |
-| `n > 64` | `(A · msgs[i])[0..63]`, then `(A · msgs[i+1])[0..n-65]` glued on |
+- The 64-bit accumulator `ymm8` is laid out with lane `i` corresponding to
+  result position `blk + i`.
+- In the broadcast/permute step `vpermd ymm6, ymm13, ymm7` plus the
+  high/low load pattern via `vinserti128`, the compiler ends up reading
+  `BB[blk + 0], BB[blk + 2], BB[blk + 1], BB[blk + 3]` into lanes 0..3.
+  Equivalently, lane 1 and lane 2 are interchanged.
+- The `vmovdqu ymmword ptr [r8 - 0x20], ymm8` store dumps the lanes back
+  into `result[blk+0..3]` in lane order — so `result[blk+1]` is written
+  with what should have been `result[blk+2]` and vice versa.
 
-`print_vector32` prints `vec->size = n` ints, so each "hash line" has length
-`n` on the wire. With `n = 100` and a parser that grabs 64 ints per line,
-you end up reading hash `i`'s entries 36..99 (the second half of column i)
-plus the first 36 entries of column `i+1` — i.e. a smear of two adjacent
-columns. The recovered `A` is the real `A` with columns `(4k+1, 4k+2)`
-swapped, and BKZ then "solves" for `π(secret)` where `π` is the same swap.
-That candidate satisfies `A_recovered · s = flag_hash mod q` so local
-verification passes, but the server's exact `secret_vec` check fails and it
-prints out the real secret. We literally saw this in the wild:
+The scalar tail loop (the `for (; blk < MM; blk++)` portion) is left
+untouched, so positions `blk = MM - (MM mod 4) .. MM - 1` are correct. For
+`MM = 64` the bug therefore swaps result indices `(1, 2), (5, 6), …,
+(57, 58)` and leaves `(60, 61, 62, 63)` alone.
 
-```
-verify: True; s[:10]   = [3, 1, 0, 5, 5, 7, 8, 5, 8, 2]
-Wrong guess! Try again.
-secret[:10]            = [3, 0, 1, 5, 5, 8, 7, 5, 8, 7]
-```
+`mat_mul_naive` is a straight scalar loop and is **not** miscompiled, so
+the `flag_hash = A · secret_vec` line in `setup_challenge` is correct —
+the server has the real `A` and the real `flag_hash`. Only what we *read
+back* from `hash_single` / `multi_hash` is permuted.
 
-`mine[1] = secret[2]`, `mine[2] = secret[1]`, `mine[5] = secret[6]`,
-`mine[6] = secret[5]` — exactly the predicted column swap pattern.
+## Effects on the two query paths
 
-### The fix
+| call | mat_mul result axis | what the bug does to *us* |
+| :- | :- | :- |
+| `hash_single`: `mat_mul(res, A, v)` | result is the **rows** of `A` (length 64) | each returned 64-vector has its entries (1,2),(5,6),…,(57,58) swapped |
+| `multi_hash`: `mat_mul(acc, B_t, a_col)` | result is the **batch index** (length `n`) | for `n = 64` the returned `hashes[1]` and `hashes[2]` (and 5/6, …) are swapped — i.e. we get `A · msgs[2]` where we asked for `A · msgs[1]` |
 
-Send `multi_hash` with `n = 64` only. Pad the last batch with zero vectors
-to keep `n` at 64. 164 columns → three batches of 64 (the third one carries
-36 real + 28 dummies). Two SSL round-trips later, `A` is recovered exactly.
+We attack `multi_hash` because the corruption is in the **batch index**,
+not the entry index, so each returned 64-vector is still a full untouched
+column of `A` — we just need to relabel which column it is.
+
+## Recovering A correctly
+
+1. Use `multi_hash` with **n = 64 exactly** (pad the last partial batch
+   with zero vectors). For `n < 64` `results[i]` is *truncated* (the
+   `mat_get_col` reads only `MatRows(res_mat) = n` entries), and for
+   `n > 64` it *wraps* into `msgs[i+1]`. `n = 64` is the only clean value.
+2. After each batch, swap back the AVX2 lane interchange: swap
+   `hashes[4k+1]` ↔ `hashes[4k+2]` for `k = 0 .. (n-1)//4 - 1`
+   (i.e. all blocks **except** the tail block, which is computed by the
+   scalar loop without the lane swap).
+3. With `n = 64`, that's swaps `(1,2), (5,6), …, (57,58)` — 15 pairs per
+   batch — and three batches reconstruct `A` exactly.
+
+`mat_mul_naive` was never used for queries (only at startup), so once `A`
+is correct the lattice attack proceeds against the real `flag_hash`.
 
 ## Lattice setup
 
-Reduce to BDD on the kernel lattice:
+Standard primal uSVP on the q-ary kernel lattice plus a Kannan embedding:
 
-1. Split `A = [A1 | A2]` with `A1 ∈ Z_q^{N×N}` and `A2 ∈ Z_q^{N×(M-N)}`.
-   `A1` is invertible with overwhelming probability for random A.
-2. Particular solution: `s0 = [A1^{-1} · t' | 0_{M-N}]` where
-   `t' = flag_hash − 5·A·1` (after centring). So `A·s0 ≡ flag_hash mod q`.
-3. Kernel basis (M × M, rows span `Λ_q^⊥(A)`):
-   - Rows `0 .. M-N-1`:   `[−A1^{-1}·A2_j | e_j]`  ("low" rows)
-   - Rows `M-N .. M-1`:  `[q·e_j | 0]`  ("q-ary" rows)
-4. Centre with `OFFSET = 5`: define `t = secret − 5·1`; entries are in
-   `[-5, 4]` and `||t||² ≈ M · 8.5 ≈ 1394`, so `||t|| ≈ 37`.
-5. Kannan embed: extend to `(M+1) × (M+1)` with last row `[s0_centered | K=1]`.
-
-The target vector `(t, K=1)` lives in this lattice — `t ≡ s − 5·1` and
-`(s − s0) ∈ Λ_q^⊥(A)` — and its norm is `≈ √1395 ≈ 37.3`.
+1. Split `A = [A1 | A2]`, `A1 ∈ Z_q^{N×N}` (invertible w.o.p.).
+2. Particular solution `s0 = [A1^{-1} t' | 0]` where `t' = flag_hash − 5·A·1`.
+3. Kernel basis (M × M) rows: `(−A1^{-1}·A2_j, e_j)` and `(q·e_j, 0)`.
+4. Centre to `t = secret − 5·1` so `t ∈ [−5, 4]^M` with `‖t‖² ≈ M · 8.5`.
+5. Kannan: extend to `(M+1) × (M+1)` with last row `(s0_centered, K=1)`.
 
 | quantity | value |
 | :- | :- |
 | dimension `d` | 165 |
 | determinant | `q^N = 12289^64` |
 | `det^{1/d}` | `≈ 38.7` |
-| Gaussian heuristic `GH(L')` | `≈ 120` |
+| `GH(L')` | `≈ 120` |
 | target `‖(t, K)‖` | `≈ 37` |
 | target / GH | `≈ 0.31` |
 
-Textbook uSVP gap.
+Textbook uSVP — but stock fpylll BKZ-40 without strategies grinds for
+minutes and lands at norm ~310. Loading fplll's `default.json`
+preprocessing+pruning is the difference between "infeasible" and "45 s".
+Homebrew installs it at
+`/usr/local/Cellar/fplll/<ver>/share/fplll/strategies/default.json`.
 
-## BKZ schedule
+A 20 s heartbeat thread keeps the kitctf SSL proxy from idling us out
+during BKZ.
 
-fpylll's `BKZ.reduction` *without* a strategies file is anaemic here: BKZ-40
-with `max_loops=12` still leaves the shortest at ~310 after 6+ minutes. The
-trick is to pass the fplll-shipped `default.json` (preprocessing tours plus
-pruning) — Homebrew installs it at
-`/usr/local/Cellar/fplll/<ver>/share/fplll/strategies/default.json`. With
-strategies on, the progression on a single instance is:
-
-```
-LLL                                 2 s    → norm 1100
-BKZ-20  ml=4                        2 s    → 545
-BKZ-30  ml=4                        3 s    → 408
-BKZ-40  ml=4                        2 s    → 340
-BKZ-50  ml=8     (GH_BND)          36 s    → 34   ← target
-```
-
-About 45 s of CPU per attempt. Comfortable inside the 200 s alarm. Some
-instances need BKZ-55/60 (still <90 s). The remote SSL connection is
-preserved across BKZ by a 20 s heartbeat thread that fires a no-op
-`multi_hash(n=1, [0,..,0])` to stop the kitctf proxy from idling us out.
-
-## Solver
-
-`solve.py`:
-
-1. Parse `flag_hash` from the banner.
-2. Recover `A` via three `multi_hash(64)` batches (with zero padding for
-   the third).
-3. Build the embedding lattice as above.
-4. LLL + progressive BKZ with `strategies=…/default.json`, scanning rows for
-   one whose last coord is `±K` and whose first M entries decode (after
-   `+OFFSET` and a `±` flip) to a `s ∈ {0..9}^M` with `A·s ≡ flag_hash`.
-5. Send `0\n` + the secret, read the flag.
+## Solver run
 
 ```
-$ python3 solve.py <host> <port>
-[ 49.3s] BKZ-50 found!
-[ 49.3s] verify: True; s[:10]=[3, 0, 1, 5, 5, 8, 7, 5, 8, 7]
+$ python3 solve.py braised-crab-marinated-in-braised-noodles-kwb4.gpn24.ctf.kitctf.de 443
+[ 17.4s] flag_hash[:5] = [504, 10242, 12264, 8305, 8985]
+[ 17.4s] Querying A...
+[ 17.8s]   batch 0..63: got 64 hashes (real=64)
+[ 18.1s]   batch 64..127: got 64 hashes (real=64)
+[ 18.4s]   batch 128..163: got 64 hashes (real=36)
+[ 18.4s] A recovered shape=(64, 164)
+[ 22.4s] LLL done; Budget remaining: 172.6s
+[ 22.4s] BKZ-30 ml=2 …  0.9s
+[ 23.3s] BKZ-40 ml=2 …  1.5s
+[ 24.8s] BKZ-50 ml=2 …  8.7s
+[ 33.5s] BKZ-55 ml=2 …  22.2s
+[ 55.7s] BKZ-58 ml=2 …  35.4s
+[ 91.1s] BKZ-58 found!
+[ 91.1s] verify: True; s[:10]=[0, 5, 1, 8, 8, 4, 7, 2, 0, 0]
 Impossible the recipe was a lie.
-GPNCTF{…}
+GPNCTF{coMP1L3rS_aRe_Y0UR_fr1End_7HEY_w0ULd_never}
 ```

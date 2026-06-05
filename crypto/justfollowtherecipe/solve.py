@@ -85,10 +85,13 @@ def multi_hash_batch(vecs):
             hashes.append(run[-n:][:64])
     return hashes[:n]
 
-# Query A via multi_hash batches of EXACTLY 64. The binary's multi_hash returns
-# a vec of length n per "hash", but the underlying buffer only has the real
-# (A · msg_i)[0..63] when n == 64 (n < 64 truncates; n > 64 wraps into msgs[i+1]).
-# So use n=64 with padding for the last partial batch.
+# Recover A via multi_hash batches of EXACTLY 64. Two extra wrinkles:
+# (1) `results[i]` is sized n (= MatRows(res_mat)), not N=64 — pad batches up
+# to 64 so each printed row is full length and aligned.
+# (2) The AVX2 mat_mul swaps result lanes 1 and 2 within each 4-way unroll
+# block. So multi_hash returns hashes[4k+1] and hashes[4k+2] swapped. Plus,
+# the lane swap also affects the *entries* of each individual hash: each
+# returned 64-vector has its own (4k+1, 4k+2) swaps applied. We undo both.
 log("Querying A...")
 A_cols = []
 batch_size = 64
@@ -99,7 +102,6 @@ for start in range(0, M, batch_size):
     for c in range(start, end):
         v = [0]*M; v[c] = 1
         vecs.append(v)
-    # Pad up to exactly 64 so each printed hash has full 64 ints.
     while len(vecs) < batch_size:
         vecs.append([0]*M)
     hashes = multi_hash_batch(vecs)
@@ -107,6 +109,13 @@ for start in range(0, M, batch_size):
     if len(hashes) != batch_size:
         log(f"  MISMATCH! expected {batch_size} got {len(hashes)}")
         sys.exit(1)
+    # multi_hash's mat_mul accumulates into `acc[i]` (batch axis). The AVX2
+    # 4-wide main loop runs `blk < MM - 4` only; the last 4 entries land in
+    # a scalar tail with no lane swap. The bug therefore swaps (4k+1, 4k+2)
+    # for k = 0 .. (n-1)//4 - 1 — *not* the final 4-block.
+    iters = max(0, (len(hashes) - 1) // 4)
+    for k in range(iters):
+        hashes[4*k + 1], hashes[4*k + 2] = hashes[4*k + 2], hashes[4*k + 1]
     A_cols.extend(hashes[:real])
 
 A = np.array(A_cols).T  # N × M
