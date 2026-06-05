@@ -19,3 +19,9 @@ Writeups for [Gulaschprogrammiernacht CTF 2026](https://ctf.kitctf.de/).
 | com-petition | [crypto/com-petition](./crypto/com-petition) |
 | easy-dsa | [crypto/easy-dsa](./crypto/easy-dsa) |
 | justfollowtherecipe | [crypto/justfollowtherecipe](./crypto/justfollowtherecipe) |
+
+## Web
+
+| Challenge | Writeup |
+|-----------|---------|
+| restaurant-builder | [web/restaurant-builder](./web/restaurant-builder) |
