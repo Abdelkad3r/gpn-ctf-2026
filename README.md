@@ -7,3 +7,4 @@ Writeups for [Gulaschprogrammiernacht CTF 2026](https://ctf.kitctf.de/).
 | Challenge | Writeup |
 |-----------|---------|
 | autocooker | [reverse/autocooker](./reverse/autocooker) |
+| specCTF | [reverse/specCTF](./reverse/specCTF) |
