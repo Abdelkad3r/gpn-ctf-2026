@@ -39,4 +39,5 @@ Writeups for [Gulaschprogrammiernacht CTF 2026](https://ctf.kitctf.de/).
 
 | Challenge | Writeup |
 |-----------|---------|
+| double-fried | [misc/double-fried](./misc/double-fried) |
 | knitted-flag | [misc/knitted-flag](./misc/knitted-flag) |
