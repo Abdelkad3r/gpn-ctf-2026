@@ -34,3 +34,9 @@ Writeups for [Gulaschprogrammiernacht CTF 2026](https://ctf.kitctf.de/).
 | Challenge | Writeup |
 |-----------|---------|
 | recipe-for-disaster | [pwn/recipe-for-disaster](./pwn/recipe-for-disaster) |
+
+## Misc
+
+| Challenge | Writeup |
+|-----------|---------|
+| knitted-flag | [misc/knitted-flag](./misc/knitted-flag) |
