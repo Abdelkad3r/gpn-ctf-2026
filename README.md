@@ -11,6 +11,7 @@ Writeups for [Gulaschprogrammiernacht CTF 2026](https://ctf.kitctf.de/).
 | Königsberg Delivery Problem | [reverse/koenigsberg-delivery-problem](./reverse/koenigsberg-delivery-problem) |
 | leftovers | [reverse/leftovers](./reverse/leftovers) |
 | leftover-leftovers | [reverse/leftover-leftovers](./reverse/leftover-leftovers) |
+| stupidcontract | [reverse/stupidcontract](./reverse/stupidcontract) |
 
 ## Crypto
 
