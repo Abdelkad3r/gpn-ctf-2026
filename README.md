@@ -19,6 +19,7 @@ Writeups for [Gulaschprogrammiernacht CTF 2026](https://ctf.kitctf.de/).
 |-----------|---------|
 | com-petition | [crypto/com-petition](./crypto/com-petition) |
 | easy-dsa | [crypto/easy-dsa](./crypto/easy-dsa) |
+| guess-the-taste | [crypto/guess-the-taste](./crypto/guess-the-taste) |
 | justfollowtherecipe | [crypto/justfollowtherecipe](./crypto/justfollowtherecipe) |
 
 ## Web
