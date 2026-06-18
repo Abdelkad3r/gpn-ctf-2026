@@ -111,8 +111,7 @@ Three reasons, in order of confidence:
    they'd have picked `q=4` and made the challenge a 30-second teaching
    exercise rather than a Crypto-difficulty entry.
 3. **The harness burned six hours on the intended path before pivoting.**
-   The companion [`meta/llm-harness.md`](./llm-harness.md) writeup
-   explicitly documents this: Claude initially built an NTRU lattice solver
+   The companion the harness initially built an NTRU lattice solver
    in Sage, ran LLL and BKZ at increasing block sizes, and was deep in a
    "tune `beta` and recover" loop before a fresh look at the protocol
    output revealed the over-range `c` values. The intended-path solve

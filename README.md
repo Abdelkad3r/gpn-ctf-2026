@@ -18,7 +18,6 @@ Each writeup is standalone, but if you want a guided tour:
 - **Then the paired challenges** — `reverse/leftovers` and
   `reverse/leftover-leftovers` are the same author's two-act lesson on
   why AOT caches are part of your TCB.
-- **Then the meta-writeup** — [meta/llm-harness](./meta/llm-harness.md)
   reflects on the workflow behind everything else, including the
   six-hour rabbit hole on `crypto/guess-the-taste` that nearly cost the
   flag.
@@ -71,7 +70,6 @@ Each writeup is standalone, but if you want a guided tour:
 
 | Writeup | Description |
 |---------|-------------|
-| [meta/llm-harness](./meta/llm-harness.md) | The Claude-Code-driven harness behind these writeups: what it was great at, where it embarrassed me, and the six-hour wrong-direction it took on `guess-the-taste` |
 
 ## Note for the prize jury
 
@@ -91,7 +89,6 @@ prizes:
 - **Best in category — misc:** [`misc/organized`](./misc/organized) and
   [`misc/customer-service`](./misc/customer-service).
 - **Best in category — pwn:** [`pwn/recipe-for-disaster`](./pwn/recipe-for-disaster).
-- **Best LLM harness writeup:** [`meta/llm-harness`](./meta/llm-harness.md) —
   honest post-mortem, not a marketing piece.
 
 ## License
